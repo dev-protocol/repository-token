@@ -4,6 +4,10 @@ pragma solidity >=0.5.17;
 interface IWithdraw {
 	function withdraw(address _property) external;
 
+	function bulkWithdraw(address[] calldata _properties)
+		external
+		returns (uint256);
+
 	function getRewardsAmount(address _property)
 		external
 		view

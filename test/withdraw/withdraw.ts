@@ -3,6 +3,7 @@ import {
 	MetricsInstance,
 	PropertyInstance,
 	IPolicyInstance,
+	MarketInstance,
 } from '../../types/truffle-contracts'
 import BigNumber from 'bignumber.js'
 import {
@@ -27,7 +28,13 @@ contract('WithdrawTest', ([deployer, user1, user2, user3, user4]) => {
 	const init = async (
 		generateWithdrawTest = false
 	): Promise<
-		[DevProtocolInstance, MetricsInstance, PropertyInstance, IPolicyInstance]
+		[
+			DevProtocolInstance,
+			MetricsInstance,
+			PropertyInstance,
+			IPolicyInstance,
+			MarketInstance
+		]
 	> => {
 		const dev = new DevProtocolInstance(deployer)
 		await dev.generateAddressConfig()
@@ -90,7 +97,7 @@ contract('WithdrawTest', ([deployer, user1, user2, user3, user4]) => {
 		])
 		await dev.lockup.update()
 
-		return [dev, metrics, property, policy]
+		return [dev, metrics, property, policy, market]
 	}
 
 	describe('Withdraw; withdraw', () => {
@@ -265,6 +272,273 @@ contract('WithdrawTest', ([deployer, user1, user2, user3, user4]) => {
 				expect(amount.toFixed()).to.be.equal('0')
 				expect(prevBalance.toFixed()).to.be.equal(afterBalance.toFixed())
 				validateErrorMessage(res, 'withdraw value is 0')
+			})
+		})
+	})
+
+	describe('Withdraw; bulkWithdraw', () => {
+		const generatePropertyAddress = async (
+			dev: DevProtocolInstance,
+			count = 10
+		): Promise<string[]> => {
+			const result: string[] = []
+			while (true) {
+				if (result.length === count) {
+					return result
+				}
+
+				const propertyAddress = getPropertyAddress(
+					// eslint-disable-next-line no-await-in-loop
+					await dev.propertyFactory.create('test', 'TEST', deployer)
+				)
+				result.push(propertyAddress)
+			}
+		}
+
+		describe('fail', () => {
+			it('should fail to call when passed address is not property contract', async () => {
+				const [dev] = await init()
+
+				const res = await dev.withdraw
+					.bulkWithdraw([deployer])
+					.catch((err: Error) => err)
+				validateAddressErrorMessage(res)
+			})
+			describe('length', () => {
+				it('target property address is 0.', async () => {
+					const [dev] = await init()
+
+					const res = await dev.withdraw
+						.bulkWithdraw([])
+						.catch((err: Error) => err)
+					validateErrorMessage(res, 'length is 0')
+				})
+				it('target property address is 10.', async () => {
+					const [dev] = await init()
+					const addresses = await generatePropertyAddress(dev)
+
+					const res = await dev.withdraw
+						.bulkWithdraw(addresses)
+						.catch((err: Error) => err)
+					validateErrorMessage(res, 'length is too long')
+				})
+			})
+			describe('duplicate', () => {
+				it('The first and second property addresses of the target property are duplicated.', async () => {
+					const [dev] = await init()
+					const addresses = await generatePropertyAddress(dev, 1)
+					const res = await dev.withdraw
+						.bulkWithdraw([addresses[0], addresses[0]])
+						.catch((err: Error) => err)
+					validateErrorMessage(res, 'duplicate address')
+				})
+				it('The fifth and ninth property addresses of the target property address are duplicated.', async () => {
+					const [dev] = await init()
+					const addresses = await generatePropertyAddress(dev)
+
+					const res = await dev.withdraw
+						.bulkWithdraw([
+							addresses[0],
+							addresses[1],
+							addresses[2],
+							addresses[3],
+							addresses[4],
+							addresses[5],
+							addresses[6],
+							addresses[7],
+							addresses[4],
+						])
+						.catch((err: Error) => err)
+					validateErrorMessage(res, 'duplicate address')
+				})
+				it('The eighth and ninth property addresses of the target property address are duplicated.', async () => {
+					const [dev] = await init()
+					const addresses = await generatePropertyAddress(dev)
+
+					const res = await dev.withdraw
+						.bulkWithdraw([
+							addresses[0],
+							addresses[1],
+							addresses[2],
+							addresses[3],
+							addresses[4],
+							addresses[5],
+							addresses[6],
+							addresses[7],
+							addresses[7],
+						])
+						.catch((err: Error) => err)
+					validateErrorMessage(res, 'duplicate address')
+				})
+			})
+		})
+		describe('success', () => {
+			describe('withdrawing interest amount', () => {
+				let dev: DevProtocolInstance
+				let property: PropertyInstance
+
+				before(async () => {
+					;[dev, , property] = await init()
+					await dev.dev.deposit(property.address, 10000)
+				})
+
+				it(`withdrawing sender's withdrawable interest full amount`, async () => {
+					const beforeBalance = await dev.dev
+						.balanceOf(deployer)
+						.then(toBigNumber)
+					const beforeTotalSupply = await dev.dev
+						.totalSupply()
+						.then(toBigNumber)
+					await mine(10)
+					const amount = await dev.withdraw
+						.calculateWithdrawableAmount(property.address, deployer)
+						.then(toBigNumber)
+					await dev.withdraw.bulkWithdraw([property.address])
+					const holderAmount = await getWithdrawHolderAmount(
+						dev,
+						property.address
+					)
+					const [oneBlockReword] = splitValue(holderAmount)
+					const realAmount = amount.plus(oneBlockReword)
+
+					const afterBalance = await dev.dev
+						.balanceOf(deployer)
+						.then(toBigNumber)
+					const afterTotalSupply = await dev.dev.totalSupply().then(toBigNumber)
+					expect(afterBalance.toFixed()).to.be.equal(
+						beforeBalance.plus(realAmount).toFixed()
+					)
+					expect(afterTotalSupply.toFixed()).to.be.equal(
+						beforeTotalSupply.plus(realAmount).toFixed()
+					)
+				})
+				it('withdrawable interest amount becomes 0 when after withdrawing interest', async () => {
+					const amount = await dev.withdraw
+						.calculateWithdrawableAmount(property.address, deployer)
+						.then(toBigNumber)
+					expect(amount.toFixed()).to.be.equal('0')
+				})
+			})
+			describe('withdrawing interest amount(multiple properties)', () => {
+				let dev: DevProtocolInstance
+				let property: PropertyInstance
+				let propertyAddress: string
+				let market: MarketInstance
+
+				before(async () => {
+					;[dev, , property, , market] = await init()
+					const addresses = await generatePropertyAddress(dev, 1)
+					propertyAddress = addresses[0]
+					await market
+						.authenticate(propertyAddress, 'id2', '', '', '', '')
+						.catch(console.error)
+					await dev.dev.deposit(property.address, 10000)
+					await dev.dev.deposit(propertyAddress, 10000)
+				})
+
+				it(`withdrawing sender's withdrawable interest full amount`, async () => {
+					const beforeBalance = await dev.dev
+						.balanceOf(deployer)
+						.then(toBigNumber)
+					const beforeTotalSupply = await dev.dev
+						.totalSupply()
+						.then(toBigNumber)
+					await mine(10)
+					const amount = await dev.withdraw
+						.calculateWithdrawableAmount(property.address, deployer)
+						.then(toBigNumber)
+					const amount2 = await dev.withdraw
+						.calculateWithdrawableAmount(propertyAddress, deployer)
+						.then(toBigNumber)
+					await dev.withdraw.bulkWithdraw([property.address, propertyAddress])
+					const holderAmount = await getWithdrawHolderAmount(
+						dev,
+						property.address
+					)
+					const [oneBlockReword] = splitValue(holderAmount)
+					const realAmount = amount.plus(oneBlockReword).plus(amount2)
+
+					const afterBalance = await dev.dev
+						.balanceOf(deployer)
+						.then(toBigNumber)
+					const afterTotalSupply = await dev.dev.totalSupply().then(toBigNumber)
+					expect(afterBalance.toFixed()).to.be.equal(
+						beforeBalance.plus(realAmount).toFixed()
+					)
+					expect(afterTotalSupply.toFixed()).to.be.equal(
+						beforeTotalSupply.plus(realAmount).toFixed()
+					)
+				})
+			})
+			describe('Withdraw; Withdraw is mint', () => {
+				it('Withdraw mints an ERC20 token specified in the Address Config Contract', async () => {
+					const [dev, , property] = await init()
+					await dev.dev.deposit(property.address, 10000)
+					const prev = await dev.dev.totalSupply().then(toBigNumber)
+					const balance = await dev.dev.balanceOf(deployer).then(toBigNumber)
+
+					await dev.withdraw.bulkWithdraw([property.address])
+
+					const next = await dev.dev.totalSupply().then(toBigNumber)
+					const afterBalance = await dev.dev
+						.balanceOf(deployer)
+						.then(toBigNumber)
+					const gap = next.minus(prev)
+
+					expect(prev.toString()).to.be.not.equal(next.toString())
+					expect(balance.plus(gap).toString()).to.be.equal(
+						afterBalance.toString()
+					)
+				})
+			})
+			describe('Withdraw; Withdrawable amount', () => {
+				it('The withdrawal amount is always the full amount of the withdrawable amount', async () => {
+					const [dev, , property] = await init()
+					await dev.dev.deposit(property.address, 10000, { from: user3 })
+					const totalSupply = await property.totalSupply().then(toBigNumber)
+					const prevBalance1 = await dev.dev
+						.balanceOf(deployer)
+						.then(toBigNumber)
+					const prevBalance2 = await dev.dev.balanceOf(user1).then(toBigNumber)
+
+					const rate = 0.2
+					await property.transfer(user1, totalSupply.times(rate), {
+						from: deployer,
+					})
+
+					const amount1 = await dev.withdraw
+						.calculateWithdrawableAmount(property.address, deployer)
+						.then(toBigNumber)
+					await dev.withdraw.bulkWithdraw([property.address], {
+						from: deployer,
+					})
+					const realAmount1 = await getWithdrawHolderSplitAmount(
+						dev,
+						amount1,
+						property,
+						deployer
+					)
+					const amount2 = await dev.withdraw
+						.calculateWithdrawableAmount(property.address, user1)
+						.then(toBigNumber)
+					await dev.withdraw.bulkWithdraw([property.address], { from: user1 })
+					const realAmount2 = await getWithdrawHolderSplitAmount(
+						dev,
+						amount2,
+						property,
+						user1
+					)
+					const nextBalance1 = await dev.dev
+						.balanceOf(deployer)
+						.then(toBigNumber)
+					const nextBalance2 = await dev.dev.balanceOf(user1).then(toBigNumber)
+					expect(prevBalance1.plus(realAmount1).toFixed()).to.be.equal(
+						nextBalance1.toFixed()
+					)
+					expect(prevBalance2.plus(realAmount2).toFixed()).to.be.equal(
+						nextBalance2.toFixed()
+					)
+				})
 			})
 		})
 	})

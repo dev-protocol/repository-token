@@ -24,7 +24,9 @@ const handler = async (
 
 	// Withdraw
 	const withdraw = new Withdraw(dev)
+	const currentWithdraw = await withdraw.load()
 	const nextWithdraw = await withdraw.create()
+	await withdraw.changeOwner(currentWithdraw, nextWithdraw)
 	await withdraw.set(nextWithdraw)
 
 	callback(null)

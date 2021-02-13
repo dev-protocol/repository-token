@@ -47,22 +47,10 @@ contract Withdraw is IWithdraw, UsingConfig, WithdrawStorage {
 		 * Validates the result is not 0.
 		 */
 		require(value != 0, "withdraw value is 0");
-
 		/**
-		 * Saves the latest cumulative sum of the holder reward price.
-		 * By subtracting this value when calculating the next rewards, always withdrawal the difference from the previous time.
+		 * save data to storage
 		 */
-		setStorageLastWithdrawnReward(_property, msg.sender, lastPrice);
-
-		/**
-		 * Sets the number of unwithdrawn rewards to 0.
-		 */
-		setPendingWithdrawal(_property, msg.sender, 0);
-
-		/**
-		 * Updates the withdrawal status to avoid double withdrawal for before DIP4.
-		 */
-		__updateLegacyWithdrawableAmount(_property, msg.sender);
+		setWithdrawDStorage(_property, msg.sender, value, lastPrice);
 
 		/**
 		 * Mints the holder reward.
@@ -75,11 +63,95 @@ contract Withdraw is IWithdraw, UsingConfig, WithdrawStorage {
 		 */
 		ILockup lockup = ILockup(config().lockup());
 		lockup.update();
+	}
+
+	/**
+	 * save data to storage
+	 */
+	function setWithdrawDStorage(
+		address _property,
+		address _sender,
+		uint256 _value,
+		uint256 _lastPrice
+	) private {
+		/**
+		 * Saves the latest cumulative sum of the holder reward price.
+		 * By subtracting this value when calculating the next rewards, always withdrawal the difference from the previous time.
+		 */
+		setStorageLastWithdrawnReward(_property, _sender, _lastPrice);
+
+		/**
+		 * Sets the number of unwithdrawn rewards to 0.
+		 */
+		setPendingWithdrawal(_property, _sender, 0);
+
+		/**
+		 * Updates the withdrawal status to avoid double withdrawal for before DIP4.
+		 */
+		__updateLegacyWithdrawableAmount(_property, _sender);
 
 		/**
 		 * Adds the reward amount already withdrawn in the passed Property.
 		 */
-		setRewardsAmount(_property, getRewardsAmount(_property).add(value));
+		setRewardsAmount(_property, getRewardsAmount(_property).add(_value));
+	}
+
+	/**
+	 * Withdraws rewards.
+	 */
+	function bulkWithdraw(address[] calldata _properties)
+		external
+		returns (uint256)
+	{
+		validateProperties(_properties);
+		uint256 mintValue;
+		for (uint256 i = 0; i < _properties.length; i++) {
+			/**
+			 * Gets the withdrawable rewards amount and the latest cumulative sum of the maximum mint amount.
+			 */
+			(uint256 value, uint256 lastPrice) =
+				_calculateWithdrawableAmount(_properties[i], msg.sender);
+			if (value == 0) {
+				continue;
+			}
+			mintValue = mintValue.add(value);
+			/**
+			 * save data to storage
+			 */
+			setWithdrawDStorage(_properties[i], msg.sender, value, lastPrice);
+		}
+		/**
+		 * Mints the holder reward.
+		 */
+		ERC20Mintable erc20 = ERC20Mintable(config().token());
+		if (mintValue != 0) {
+			require(erc20.mint(msg.sender, mintValue), "dev mint failed");
+		}
+		/**
+		 * Since the total supply of tokens has changed, updates the latest maximum mint amount.
+		 */
+		ILockup lockup = ILockup(config().lockup());
+		lockup.update();
+		return mintValue;
+	}
+
+	/**
+	 * check data
+	 */
+	function validateProperties(address[] memory _properties) private view {
+		require(_properties.length != 0, "length is 0");
+		require(_properties.length <= 9, "length is too long");
+
+		IPropertyGroup propertyGroup = IPropertyGroup(config().propertyGroup());
+		for (uint256 i = 0; i < _properties.length; i++) {
+			require(
+				propertyGroup.isGroup(_properties[i]),
+				"this is illegal address"
+			);
+			for (uint256 k = i + 1; k < _properties.length; k++) {
+				require(_properties[i] != _properties[k], "duplicate address");
+			}
+		}
 	}
 
 	/**
