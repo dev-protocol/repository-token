@@ -47,7 +47,7 @@
 		"truffle-typings": "1.0.8",
 		"ts-generator": "0.1.1",
 		"ts-node": "10.1.0",
-		"typechain": "4.0.3",
+		"typechain": "5.1.1",
 		"typechain-target-truffle": "1.0.2",
 		"typescript": "4.3.5",
 		"web3": "1.4.0"
