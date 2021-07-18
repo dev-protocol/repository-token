@@ -14,7 +14,7 @@ const handler = async (
 		return
 	}
 
-	const gasFetcher = async () => 4000000
+	const gasFetcher = async () => 6721975
 	const gasPriceFetcher = ethGasStationFetcher(egsApiKey)
 	const dev = new DevCommonInstance(
 		artifacts,
@@ -34,10 +34,14 @@ const handler = async (
 	const l = new Lockup(dev)
 	const lCurrent = await l.load()
 	const lNext = await l.create(devMinter.address)
+	await l.changeOwner(lCurrent, lNext)
+	await l.set(lNext)
 
 	const w = new Withdraw(dev)
 	const wCurrent = await w.load()
 	const wNext = await w.create(devMinter.address)
+	await w.changeOwner(wCurrent, wNext)
+	await w.set(wNext)
 
 	await Promise.all([
 		l.changeOwner(lCurrent, lNext),
